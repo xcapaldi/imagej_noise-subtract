@@ -1,9 +1,26 @@
 from ij import IJ, ImagePlus, ImageStack
 from ij.process import FloatProcessor
+from ij.gui import GenericDialog
 
 # currently this plugin does not save the metadata from the
 # original image (microscope metadata).
 
+# give options for background subtraction
+def getOptions():
+    gd = GenericDialog("Options")
+    gd.addCheckbox("3x3 boundary region", True) # use 3x3 region
+    gd.addCheckbox("5x5 boundary region", True) # use 5x5 region
+    # change the multiple of the standard deviation that is used
+    # as a cutoff for the subtraction
+    gd.addNumericField("N * sigma cutoff", 3.00, 2) # 2 decimals
+    gd.showDialog()
+    # pull options
+    close = gd.getNextBoolean()
+    far = gd.getNextBoolean()
+    cutoff = gd.getNextNumber()
+    return close, far, cutoff
+
+close, far, cutoff = getOptions()
 
 # pull the active image
 imp  = IJ.getImage()
@@ -80,21 +97,21 @@ for i in range(1 ,imp.getNSlices() + 1):
     # O O O O O O O
     #
 
-    # create empty array for the mean intensities of the close pixels
-    closespot=[]
-
-    for r in range(2, height - 2):
-        closespot.append([]) # add new row
-        for p in range (2, width - 2):
-            closespot[r - 2].append((initsub[r - 1][p - 1]
-                + initsub[r - 1][p]
-                + initsub[r - 1][p + 1]
-                + initsub[r][p - 1]
-                + initsub[r][p + 1]
-                + initsub[r + 1][p - 1]
-                + initsub[r + 1][p]
-                + initsub[r + 1][p + 1])
-                                  / 8)
+    if close == True:
+        # create empty array for the mean intensities of the close pixels
+        closespot=[]
+        for r in range(2, height - 2):
+            closespot.append([]) # add new row
+            for p in range (2, width - 2):
+                closespot[r - 2].append((initsub[r - 1][p - 1]
+                                         + initsub[r - 1][p]
+                                         + initsub[r - 1][p + 1]
+                                         + initsub[r][p - 1]
+                                         + initsub[r][p + 1]
+                                         + initsub[r + 1][p - 1]
+                                         + initsub[r + 1][p]
+                                         + initsub[r + 1][p + 1])
+                                        / 8)
 
     # check 5x5 region surrounding pixel of interest and find the mean intensity
     #
@@ -106,42 +123,60 @@ for i in range(1 ,imp.getNSlices() + 1):
     # O X X X X X O
     # O O O O O O O
     #
-    
-    farspot=[]
 
-    for r in range(2, height - 2):
-        farspot.append([]) # add new row
-        for p in range (2, width - 2):
-            farspot[r - 2].append((initsub[r - 2][p - 2] 
-                + initsub[r - 2][p - 1]
-                + initsub[r - 2][p]
-                + initsub[r - 2][p + 1]
-                + initsub[r - 2][p + 2]
-                + initsub[r - 1][p - 2]
-                + initsub[r - 1][p + 2]
-                + initsub[r][p - 2]
-                + initsub[r][p + 2]
-                + initsub[r + 1][p - 2]
-                + initsub[r + 1][p + 2]
-                + initsub[r + 2][p - 2]
-                + initsub[r + 2][p - 1]
-                + initsub[r + 2][p]
-                + initsub[r + 2][p + 1]
-                + initsub[r + 2][p + 2])
-                                / 16)
-
-
+    if far == True:
+        farspot=[]
+        for r in range(2, height - 2):
+            farspot.append([]) # add new row
+            for p in range (2, width - 2):
+                farspot[r - 2].append((initsub[r - 2][p - 2] 
+                                   + initsub[r - 2][p - 1]
+                                   + initsub[r - 2][p]
+                                   + initsub[r - 2][p + 1]
+                                   + initsub[r - 2][p + 2]
+                                   + initsub[r - 1][p - 2]
+                                   + initsub[r - 1][p + 2]
+                                   + initsub[r][p - 2]
+                                   + initsub[r][p + 2]
+                                   + initsub[r + 1][p - 2]
+                                   + initsub[r + 1][p + 2]
+                                   + initsub[r + 2][p - 2]
+                                   + initsub[r + 2][p - 1]
+                                   + initsub[r + 2][p]
+                                   + initsub[r + 2][p + 1]
+                                   + initsub[r + 2][p + 2])
+                                  / 16)
+            
     # if either close or far regions are <(3*sigma) set the pixel value to zero
     # this will be a linear array again
     finimg=[]
 
-    for r in range(2, height - 2):
-        for p in range(2, width - 2):
-            if (closespot[r - 2][p - 2] < (3 * stddev) or
-                farspot[r - 2][p - 2] < (3 * stddev)):
-                finimg.append(0)
-            else:
-                finimg.append(initsub[r][p])
+    if (close == True) and (far == True):
+        for r in range(2, height - 2):
+            for p in range(2, width - 2):
+                if (closespot[r - 2][p - 2] < (cutoff * stddev) or
+                    farspot[r - 2][p - 2] < (cutoff * stddev)):
+                    finimg.append(0)
+                else:
+                    finimg.append(initsub[r][p])
+    elif (close == True) and (far == False):
+        for r in range(2, height - 2):
+            for p in range(2, width - 2):
+                if closespot[r - 2][p - 2] < (cutoff * stddev):
+                    finimg.append(0)
+                else:
+                    finimg.append(initsub[r][p])
+    elif (close == False) and (far == True):
+        for r in range(2, height - 2):
+            for p in range(2, width - 2):
+                if farspot[r - 2][p - 2] < (cutoff * stddev):
+                    finimg.append(0)
+                else:
+                    finimg.append(initsub[r][p])
+    else:
+        for r in range(2, height - 2):
+            for p in range(2, width - 2):
+                    finimg.append(initsub[r][p])
 
     fp = FloatProcessor(width - 4, height - 4, finimg, None)
 
