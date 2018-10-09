@@ -27,4 +27,4 @@ Then in Fiji go to Help -> Refresh Menus. You will have to restart Fiji and then
 
 ## TODO
 
-Make the copy the metadata from the original image to the background subtracted image.
+Copy the metadata from the original image to the background subtracted image.
