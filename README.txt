@@ -19,7 +19,7 @@ The mean intensity of the pixels along the boundary of the image is subtracted f
 
 Each pixel is iterated. The mean intensity of 8 pixels surrounding the target pixel in a 3x3 region is calcuated. The mean intensity of 16 pixels surrounding the target pixel in a 5x5 region is calculated. If either mean intensities are less than three times the sample standard deviation (sigma), the pixel is taken to be noise and set to an intensity of 0.
 
-## Intallation
+## Installation
 
 In Gnu/Linux and Windows, place the noise_subtract.py file inside the Fiji.app/plugins folder (or any subfolder). In MacOSX go to the "Applications" folder in Finder, right-click on the Fiji icon and select "Show package contents" to find the plugins folder.
 
