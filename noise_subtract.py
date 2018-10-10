@@ -44,9 +44,9 @@ if options is not None:
             cutrows(pixels)
 
     # iterate each slice in the stack
-    for i in range(1 ,imp.getNSlices() + 1):
+    for i in range(1, stack.getSize() + 1):
         # get progress
-        IJ.showProgress(i, imp.getNSlices() + 1)
+        IJ.showProgress(i, stack.getSize() + 1)
     
         # image processor converted to float to avoid byte problems
         ip = stack.getProcessor(i).convertToFloat()
