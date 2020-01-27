@@ -1,5 +1,7 @@
 # README
 
+![Background subtraction](background-subtract.png?raw=true "Background subtraction")
+
 This is a Python plugin for ImageJ/Fiji which implements an algorithm developed by Patrick Doyle's group at MIT. It performs a two-stage background removal on fluorescent microscopy data, particularly that of DNA. The algorithm is detailed (with small errors) in the supplementary information for the following journal article:
 
 Revisiting the Conformation and Dynamics of DNA in Slitlike Confinement
