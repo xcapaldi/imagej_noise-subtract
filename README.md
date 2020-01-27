@@ -1,4 +1,4 @@
-# README
+# ImageJ/Fiji Jython Plugin: Noise Subtraction
 
 ![Background subtraction](background-subtract.png?raw=true "Background subtraction")
 
