@@ -1,3 +1,4 @@
+import time
 from ij import IJ, ImagePlus, ImageStack
 from ij.process import FloatProcessor
 from ij.gui import GenericDialog
@@ -27,6 +28,7 @@ options = getOptions()
 
 # check if user canceled
 if options is not None:
+    start_time = time.time()
     close, far, cutoff = options
 
     # pull the active image
@@ -203,3 +205,5 @@ if options is not None:
 
     impfin.show()
     IJ.showProgress(1) # show progess bar
+    total_time = time.time() - start_time
+    IJ.log('Noise subtraction operation done in %.2f seconds' % total_time)
