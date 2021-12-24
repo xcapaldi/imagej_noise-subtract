@@ -1,21 +1,25 @@
+# ImageJ/FIJI Jython Plugin: Noise Subtraction
+# MIT - Copyright (c) 2018 Xavier Capaldi
+
 import time
 from ij import IJ, ImagePlus, ImageStack
-from ij.process import FloatProcessor
+from ij.process import FloatProcessor, ByteProcessor
 from ij.gui import GenericDialog
 
 # currently this plugin does not save the metadata from the
 # original image (microscope metadata).
 
-# give options for background subtraction
-def getOptions():
+def get_options():
+    """ Get user options. """
+
     gd = GenericDialog("Options")
-    gd.addCheckbox("3x3 boundary region", True) # use 3x3 region
-    gd.addCheckbox("5x5 boundary region", True) # use 5x5 region
+    gd.addCheckbox("3x3 boundary region", True)
+    gd.addCheckbox("5x5 boundary region", True)
     # change the multiple of the standard deviation that is used
     # as a cutoff for the subtraction
     gd.addNumericField("N * sigma cutoff", 3.00, 2) # 2 decimals
     gd.showDialog()
-    # check is user canceled operation
+    # check if user canceled operation
     if gd.wasCanceled():
         return
     # pull options
@@ -24,26 +28,151 @@ def getOptions():
     cutoff = gd.getNextNumber()
     return close, far, cutoff
 
-options = getOptions()
+def initial_subtract(pixels, width, height):
+    """
+    Find the mean and sample standard deviation of border
+    pixels. Subtract the mean intensity from every pixel.
+    Return the sample standard deviation.
+    """
 
-# check if user canceled
-if options is not None:
-    start_time = time.time()
-    close, far, cutoff = options
+    boundary = [0.] * (height + height + width + width - 4)
 
-    # pull the active image
-    imp  = IJ.getImage()
-    stack = imp.getImageStack()
-    subimg = [] # list of background subtracted slices
+    # top and bottom boundaries
+    boundary[:width] = pixels[:width]
+    boundary[width:2*width] = pixels[-width:]
 
-    # define function to recursively divide pixels into nested array
-    def cutrows(pixels):
-        if len(pixels) < width:
-            return rows
+    # left and right boundaries
+    for r in range(height-2):
+        boundary[(2*width)+(r*2)] = pixels[width*(r+1)]
+        boundary[(2*width)+(r*2)+1] = pixels[(width*(r+2))-1]
+
+    # mean of boundary pixels
+    mean = sum(boundary) / len(boundary)
+
+    # sample standard deviation (sigma) of intensity for boundary pixels
+    stddev = (sum((p - mean) ** 2 for p in boundary) /
+              (len(boundary) - 1)) ** 0.5
+    
+    # iterate through pixels and substract mean intensity
+    # negative values are rounded up to zero
+    for i, p in enumerate(pixels):
+        pixels[i] = (abs(p - mean) + (p - mean)) / 2
+        
+    return stddev
+
+def fringe_mask(mask, width, fringe_width):
+    """
+    Given a mask which is initially all 255 and some
+    distance from the borders which should be set to 0,
+    set the fringe to 0 from the border to that distance.
+    """
+
+    for i, _ in enumerate(mask):
+        if i % width < fringe_width:
+            mask[i] = 0
+        elif i % width >= width - fringe_width:
+            mask[i] = 0
+
+    mask[:fringe_width*width] = [0]*(fringe_width*width)
+    mask[-(fringe_width*width):] = [0]*(fringe_width*width) 
+    
+def init_mask(pixels, mask):
+    """
+    Mask pixels which are already 0 after the initial
+    background subtraction.
+    """
+    
+    for i, p in enumerate(pixels):
+        if p <= 0:
+            mask[i] = 0
+
+def close_subtract(pixels, mask, width, cutoff, stddev):
+    """
+    Check 3x3 region surrounding each pixel not already masked
+    and check if the mean intensity of those surrounding pixels
+    is less than some multiple of the sample standard deviation
+    of the boundary pixels. If this is the case, set the pixel
+    mask to 0 to indicate it is a background pixel.
+    
+    O O O O O O O
+    O O O O O O O
+    O O X X X O O
+    O O X P X O O
+    O O X X X O O
+    O O O O O O O
+    O O O O O O O
+    """
+
+    # create empty array for the mean intensities of the close pixels
+    close_spot = [0.] * 8
+
+    for i, _ in enumerate(pixels):
+        if mask[i] == 255:
+            close_spot[:3] = pixels[i-width-1:i-width+2]
+            close_spot[3] = pixels[i-1]
+            close_spot[4] = pixels[i+1]
+            close_spot[5:] = pixels[i+width-1:i+width+2]
+            if sum(close_spot)/8 < cutoff * stddev:
+                mask[i] = 0
         else:
-            rows.append(pixels[:width])
-            del pixels[:width]
-            cutrows(pixels)
+            pass
+
+    return
+
+def far_subtract(pixels, mask, width, cutoff, stddev):
+    """
+    Check 5x5 region surrounding each pixel not already masked
+    and check if the mean intensity of those surrounding pixels
+    is less than some multiple of the sample standard deviation
+    of the boundary pixels. If this is the case, set the pixel
+    mask to 0 to indicate it is a background pixel.
+    
+    O O O O O O O
+    O X X X X X O
+    O X O O O X O
+    O X O P O X O
+    O X O O O X O
+    O X X X X X O
+    O O O O O O O
+    """
+
+    # create empty array for the mean intensities of the close pixels
+    far_spot = [0.] * 16
+    for i, _ in enumerate(pixels):
+        if mask[i] == 255:
+            far_spot[:5] = pixels[i-(2*width)-2:i-(2*width)+3]
+            far_spot[5] = pixels[i-width-2]
+            far_spot[6] = pixels[i-width+2]
+            far_spot[7] = pixels[i-2]
+            far_spot[8] = pixels[i+2]
+            far_spot[9] = pixels[i+width-2]
+            far_spot[10] = pixels[i+width+2]
+            far_spot[11:] = pixels[i+(2*width)-2:i+(2*width)+3]
+            if sum(far_spot)/16 < cutoff * stddev:
+                mask[i] = 0
+        else:
+            pass
+
+    return
+
+def apply_mask(pixels, mask):
+    """
+    Iterate through mask and for each 0, set the corresponding
+    to 0 as well. Leave the unmasked values as significant data.
+    """
+    
+    try:
+    	len(pixels) == len(mask)
+    except:
+    	IJ.log('Image and mask are not same size')
+
+    for i, m in enumerate(mask):
+    	if m == 0:
+    	    pixels[i] = 0
+    	
+def run_script(imp, close, far, cutoff):
+    stack = imp.getImageStack()
+    fin_stack = ImageStack(imp.width, imp.height)
 
     # iterate each slice in the stack
     for i in range(1, stack.getSize() + 1):
@@ -55,155 +184,47 @@ if options is not None:
         # pixels points to the array of floats
         pixels = ip.getPixels()
 
-        rows = [] # empty array to store rows of pixels
-        width = imp.width
-    
-        # cut the image into rows of pixels
-        cutrows(pixels)
+        # initial subtraction
+        stddev = initial_subtract(pixels, imp.width, imp.height)
 
-        # now we find the height of the image
-        height = len(rows)
+        mask = [255] * (imp.width*imp.height)
 
-        # INITIAL SUBTRACTION
-
-        # we take the top and bottom edges of the image
-        boundary = rows[0] + rows[height - 1]
-
-        # iterate through the left and rightmost pixels
-        # append them to the boundary array
-        for g in range(1, height - 1):
-            boundary.append(rows[g][0]) # left
-            boundary.append(rows[g][-1]) # right
-
-        # mean of boundary pixels
-        mean = sum(boundary) / len(boundary)
-
-        # sample standard deviation (sigma) of intensity for boundary pixels
-        stddev = (sum((p - mean) ** 2 for p in boundary) /
-                  (len(boundary) - 1)) ** 0.5
-    
-        # iterate through each row of pixels and substract mean intensity
-        # negative values are rounded up to zero
-        initsub = []
-        for h in range(0, len(rows)):
-            initsub.append(list(map(
-                lambda x: (abs(x - mean) + (x - mean)) / 2, rows[h])))
-
-        # INDIVIDUAL NOISE SPOT REMOVAL
-        # be aware that your final image will have a width and height
-        # four pixels smaller than your original due to the noise
-        # reduction algorithm
-
-        # check 3x3 region surrounding pixel of interest and find mean intensity
-        #
-        # O O O O O O O
-        # O O O O O O O
-        # O O X X X O O
-        # O O X P X O O
-        # O O X X X O O
-        # O O O O O O O
-        # O O O O O O O
-        #
-
-        if close == True:
-            # create empty array for the mean intensities of the close pixels
-            closespot=[]
-            for r in range(2, height - 2):
-                closespot.append([]) # add new row
-                for p in range (2, width - 2):
-                    closespot[r - 2].append((initsub[r - 1][p - 1]
-                                             + initsub[r - 1][p]
-                                             + initsub[r - 1][p + 1]
-                                             + initsub[r][p - 1]
-                                             + initsub[r][p + 1]
-                                             + initsub[r + 1][p - 1]
-                                             + initsub[r + 1][p]
-                                             + initsub[r + 1][p + 1])
-                                            / 8)
-
-        # check 5x5 region surrounding pixel of interest
-        # find the mean intensity
-        #
-        # O O O O O O O
-        # O X X X X X O
-        # O X O O O X O
-        # O X O P O X O
-        # O X O O O X O
-        # O X X X X X O
-        # O O O O O O O
-        #
-
-        if far == True:
-            farspot=[]
-            for r in range(2, height - 2):
-                farspot.append([]) # add new row
-                for p in range (2, width - 2):
-                    farspot[r - 2].append((initsub[r - 2][p - 2] 
-                                           + initsub[r - 2][p - 1]
-                                           + initsub[r - 2][p]
-                                           + initsub[r - 2][p + 1]
-                                           + initsub[r - 2][p + 2]
-                                           + initsub[r - 1][p - 2]
-                                           + initsub[r - 1][p + 2]
-                                           + initsub[r][p - 2]
-                                           + initsub[r][p + 2]
-                                           + initsub[r + 1][p - 2]
-                                           + initsub[r + 1][p + 2]
-                                           + initsub[r + 2][p - 2]
-                                           + initsub[r + 2][p - 1]
-                                           + initsub[r + 2][p]
-                                           + initsub[r + 2][p + 1]
-                                           + initsub[r + 2][p + 2])
-                                          / 16)
-            
-        # if either close or far regions are <(3*sigma)
-        # set the pixel value to zero
-        
-        # this will be a linear array again
-        finimg=[]
-
-        if (close == True) and (far == True):
-            for r in range(2, height - 2):
-                for p in range(2, width - 2):
-                    if (closespot[r - 2][p - 2] < (cutoff * stddev) or
-                        farspot[r - 2][p - 2] < (cutoff * stddev)):
-                        finimg.append(0)
-                    else:
-                        finimg.append(initsub[r][p])
-        elif (close == True) and (far == False):
-            for r in range(2, height - 2):
-                for p in range(2, width - 2):
-                    if closespot[r - 2][p - 2] < (cutoff * stddev):
-                        finimg.append(0)
-                    else:
-                        finimg.append(initsub[r][p])
-        elif (close == False) and (far == True):
-            for r in range(2, height - 2):
-                for p in range(2, width - 2):
-                    if farspot[r - 2][p - 2] < (cutoff * stddev):
-                        finimg.append(0)
-                    else:
-                        finimg.append(initsub[r][p])
+        # mask borders of image dependent on settings
+        if far:
+            fringe_mask(mask, imp.width, 2)
+        elif close:
+            fringe_mask(mask, imp.width, 1)
         else:
-            for r in range(2, height - 2):
-                for p in range(2, width - 2):
-                    finimg.append(initsub[r][p])
+        	pass
 
-        fp = FloatProcessor(width - 4, height - 4, finimg, None)
+        # update mask
+        if close:
+            init_mask(pixels, mask)
+            close_subtract(pixels, mask, imp.width, cutoff, stddev)
+        
+        if far:
+            init_mask(pixels, mask)
+            far_subtract(pixels, mask, imp.width, cutoff, stddev)
 
-        subimg.append(fp)
-
-    # create new stack with substracted images
-    finstack = ImageStack(width - 4, height - 4)
-    for fp in subimg:
-        finstack.addSlice(None, fp)
+        if close or far:
+        	apply_mask(pixels, mask)
+        
+        fin_stack.addSlice(None, FloatProcessor(imp.width, imp.height, pixels, None))
 
     # create new image from final stack
-    impfin = ImagePlus(imp.title[: -4] + "_background-subtracted.tif", finstack)
+    imp_fin = ImagePlus(imp.title[: -4] + "_background-subtracted.tif", fin_stack)
     # keep the same image calibration
-    impfin.setCalibration(imp.getCalibration().copy())
+    imp_fin.setCalibration(imp.getCalibration().copy())
 
-    impfin.show()
+    imp_fin.show()
     IJ.showProgress(1) # show progess bar
-    total_time = time.time() - start_time
-    IJ.log('Noise subtraction operation done in %.2f seconds' % total_time)
+    
+if __name__ in ['__builtin__','__main__']:
+    options = get_options()
+    if options is not None:
+        close, far, cutoff = options
+        imp  = IJ.getImage()
+        start_time = time.time()
+        run_script(imp, close, far, cutoff)
+        total_time = time.time() - start_time
+        IJ.log('Noise subtraction operation done in %.2f seconds' % total_time)
